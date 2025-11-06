@@ -1,2 +1,3 @@
 PYCHARM_DEBUG=1 python backup.py --config /opt/mautic-backup/config.yaml
+0 3 * * * /usr/bin/python3 /opt/mautic-backup/backup.py --config /opt/mautic-backup/config.yaml >> /var/log/mautic-backup.log 2>&1
 

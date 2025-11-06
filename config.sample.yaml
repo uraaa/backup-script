@@ -1,0 +1,43 @@
+mautic:
+  code_paths:
+    - /var/www/mautic/docroot/themes
+    - /var/www/mautic/docroot/plugins
+  assets_paths:
+    - /var/www/mautic/docroot/media
+  config_paths:
+    - /var/www/mautic/config
+    - /var/www/mautic/.env
+nginx:
+  paths:
+    - /etc/nginx/nginx.conf
+    - /etc/nginx/sites-available
+db:
+  host: localhost
+  port: 3306
+  name: mautic
+  user: mautic
+  password: "CHANGE_ME"
+backup:
+  temp_dir: /tmp/mautic-backup
+  local_dir: /var/backups/mautic
+  max_archives: 14
+logging:
+  dir: /opt/mautic-backup/logs
+alerts:
+  enabled: true
+  smtp_host: smtp.example.com
+  smtp_port: 587
+  use_tls: true
+  username: noreply@example.com
+  password: "CHANGE_ME"
+  from_email: noreply@example.com
+  to_emails:
+    - admin@example.com
+sharepoint:
+  enabled: true
+  tenant_id: "YOUR_TENANT_ID"
+  client_id: "YOUR_APP_CLIENT_ID"
+  client_secret: "CHANGE_ME"
+  site_id: "YOUR_SITE_ID"
+  drive_id: "YOUR_DRIVE_ID"
+  folder_path: "/Mautic/backups"

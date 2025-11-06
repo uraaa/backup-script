@@ -1,0 +1,2 @@
+PYCHARM_DEBUG=1 python backup.py --config /opt/mautic-backup/config.yaml
+

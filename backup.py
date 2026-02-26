@@ -15,7 +15,7 @@ from modules import paths as paths_mod
 from modules import db as db_mod
 from modules.archiver import make_archive
 from modules.storage_local import save_to_local
-from modules.rotation import rotate_local, rotate_sharepoint
+from modules.rotation import rotate_local, rotate_sharepoint, rotate_logs
 from modules.alerts import send_error_email
 from modules.storage_sharepoint import SharePointClient, SharePointConfig
 
@@ -44,7 +44,9 @@ def ensure_dir(p: str):
 def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
     cfg = load_config(config_path)
 
-    log_dir = cfg.get('logging', {}).get('dir', './logs')
+    log_cfg = cfg.get('logging', {})
+    log_dir = log_cfg.get('dir', './logs')
+    max_log_files = int(log_cfg.get('max_log_files', 30))
     setup_logging(log_dir, verbose=verbose)
 
     logger.info("==== Mautic backup started ====")
@@ -118,6 +120,12 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
                 logger.debug("Removed temporary archive %s", archive_local_path)
         except Exception:
             logger.warning("Failed to remove temporary archive %s", archive_local_path, exc_info=True)
+
+        # Rotation for logs
+        try:
+            rotate_logs(log_dir, max_log_files=max_log_files, dry_run=dry_run)
+        except Exception:
+            logger.exception("Log rotation failed (will continue)")
 
         # Rotation for local
         try:

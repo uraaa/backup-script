@@ -23,6 +23,7 @@ backup:
   max_archives: 14
 logging:
   dir: /opt/mautic-backup/logs
+  max_log_files: 30
 alerts:
   enabled: true
   smtp_host: smtp.example.com

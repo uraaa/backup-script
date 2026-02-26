@@ -15,9 +15,10 @@ from modules import paths as paths_mod
 from modules import db as db_mod
 from modules.archiver import make_archive
 from modules.storage_local import save_to_local
-from modules.rotation import rotate_local, rotate_sharepoint, rotate_logs
+from modules.rotation import rotate_local, rotate_sharepoint, rotate_gdrive, rotate_logs
 from modules.alerts import send_error_email
 from modules.storage_sharepoint import SharePointClient, SharePointConfig
+from modules.storage_gdrive import GoogleDriveClient, GoogleDriveConfig
 
 import os
 
@@ -49,24 +50,19 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
     max_log_files = int(log_cfg.get('max_log_files', 30))
     setup_logging(log_dir, verbose=verbose)
 
-    logger.info("==== Mautic backup started ====")
+    logger.info("==== Backup started ====")
 
     # Extract config parts
-    mautic = cfg.get('mautic', {})
-    nginx = cfg.get('nginx', {})
+    paths_cfg = cfg.get('paths', [])
     db = cfg.get('db', {})
     backup_cfg = cfg.get('backup', {})
     alerts_cfg = cfg.get('alerts', {})
     sp_cfg = cfg.get('sharepoint', {})
+    gd_cfg = cfg.get('google_drive', {})
 
-    temp_dir_root = backup_cfg.get('temp_dir', '/tmp/mautic-backup')
+    temp_dir_root = backup_cfg.get('temp_dir', '/tmp/backup')
     local_dir = backup_cfg.get('local_dir', './backups')
     max_archives = int(backup_cfg.get('max_archives', 14))
-
-    code_paths = mautic.get('code_paths', [])
-    assets_paths = mautic.get('assets_paths', [])
-    config_paths = mautic.get('config_paths', [])
-    nginx_paths = nginx.get('paths', [])
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     work_dir = os.path.join(temp_dir_root, f"work_{timestamp}")
@@ -75,6 +71,7 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
     archive_local_path = None
     local_saved_path = None
     sharepoint_uploaded_name = None
+    gdrive_uploaded_name = None
 
     try:
         # Prepare dirs
@@ -86,10 +83,7 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
         ensure_dir(work_dir)
         paths_mod.stage_sources(
             temp_dir=work_dir,
-            code_paths=code_paths,
-            assets_paths=assets_paths,
-            config_paths=config_paths,
-            nginx_paths=nginx_paths,
+            paths=paths_cfg,
             dry_run=dry_run,
         )
 
@@ -159,19 +153,41 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
         else:
             logger.info("SharePoint upload disabled in config")
 
-        logger.info("==== Mautic backup finished ====")
+        # Google Drive upload if enabled
+        if gd_cfg.get('enabled', False):
+            try:
+                gd_cfg_obj = GoogleDriveConfig(
+                    credentials_file=str(gd_cfg.get('credentials_file', '')),
+                    folder_id=str(gd_cfg.get('folder_id', '')),
+                )
+                gd_client = GoogleDriveClient(gd_cfg_obj)
+                gdrive_uploaded_name = gd_client.upload_file(local_saved_path, dry_run=dry_run)
+                # Rotation for Google Drive
+                try:
+                    rotate_gdrive(gd_client, max_archives=max_archives, dry_run=dry_run)
+                except Exception:
+                    logger.exception("Google Drive rotation failed")
+                    exit_code = 1
+            except Exception:
+                logger.exception("Google Drive upload failed")
+                exit_code = 1
+        else:
+            logger.info("Google Drive upload disabled in config")
+
+        logger.info("==== Backup finished ====")
         # Send alert on partial failures as well
         try:
             if exit_code == 1 and alerts_cfg.get('enabled', False):
-                subject = f"Mautic backup FAILED (partial): {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                subject = f"Backup FAILED (partial): {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 log_file_hint = os.path.join(log_dir, f"backup_{datetime.now().strftime('%Y-%m-%d')}.log")
                 body = (
-                    "One or more non-fatal errors occurred during Mautic backup.\n\n"
+                    "One or more non-fatal errors occurred during backup.\n\n"
                     f"Config: {config_path}\n"
                     f"Work dir: {work_dir}\n"
                     f"Local archive (if any): {archive_local_path}\n"
                     f"Local saved (if any): {local_saved_path}\n"
-                    f"SharePoint uploaded name (if any): {sharepoint_uploaded_name}\n\n"
+                    f"SharePoint uploaded name (if any): {sharepoint_uploaded_name}\n"
+                    f"Google Drive uploaded name (if any): {gdrive_uploaded_name}\n\n"
                     f"See log file: {log_file_hint}\n"
                 )
                 send_error_email(
@@ -193,15 +209,16 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
         logger.exception("Backup failed with an unhandled error")
         try:
             if alerts_cfg.get('enabled', False):
-                subject = f"Mautic backup FAILED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                subject = f"Backup FAILED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 log_file_hint = os.path.join(log_dir, f"backup_{datetime.now().strftime('%Y-%m-%d')}.log")
                 body = (
-                    "An error occurred during Mautic backup.\n\n"
+                    "An error occurred during backup.\n\n"
                     f"Config: {config_path}\n"
                     f"Work dir: {work_dir}\n"
                     f"Local archive (if any): {archive_local_path}\n"
                     f"Local saved (if any): {local_saved_path}\n"
-                    f"SharePoint uploaded name (if any): {sharepoint_uploaded_name}\n\n"
+                    f"SharePoint uploaded name (if any): {sharepoint_uploaded_name}\n"
+                    f"Google Drive uploaded name (if any): {gdrive_uploaded_name}\n\n"
                     f"See log file: {log_file_hint}\n\n"
                     f"Traceback:\n{traceback.format_exc()}"
                 )
@@ -230,7 +247,7 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Mautic backup utility')
+    parser = argparse.ArgumentParser(description='Web application backup utility')
     parser.add_argument('--config', required=True, help='Path to config.yaml')
     parser.add_argument('--dry-run', action='store_true', help='Run without creating archive or uploading')
     parser.add_argument('--verbose', action='store_true', help='Enable DEBUG logging')

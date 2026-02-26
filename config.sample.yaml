@@ -1,28 +1,25 @@
-mautic:
-  code_paths:
-    - /var/www/mautic/docroot/themes
-    - /var/www/mautic/docroot/plugins
-  assets_paths:
-    - /var/www/mautic/docroot/media
-  config_paths:
-    - /var/www/mautic/config
-    - /var/www/mautic/.env
-nginx:
-  paths:
-    - /etc/nginx/nginx.conf
-    - /etc/nginx/sites-available
+paths:
+  - path: /var/www/myapp
+    exclude:
+      - cache
+      - tmp
+      - vendor
+      - node_modules
+  - path: /var/www/myapp/.env
+  - path: /etc/nginx/nginx.conf
+  - path: /etc/nginx/sites-available
 db:
   host: localhost
   port: 3306
-  name: mautic
-  user: mautic
+  name: myapp
+  user: myapp
   password: "CHANGE_ME"
 backup:
-  temp_dir: /tmp/mautic-backup
-  local_dir: /var/backups/mautic
+  temp_dir: /tmp/backup
+  local_dir: /var/backups/myapp
   max_archives: 14
 logging:
-  dir: /opt/mautic-backup/logs
+  dir: /opt/backup/logs
   max_log_files: 30
 alerts:
   enabled: true
@@ -41,4 +38,8 @@ sharepoint:
   client_secret: "CHANGE_ME"
   site_id: "YOUR_SITE_ID"
   drive_id: "YOUR_DRIVE_ID"
-  folder_path: "/Mautic/backups"
+  folder_path: "/backups"
+google_drive:
+  enabled: false
+  credentials_file: /opt/backup/service_account.json
+  folder_id: "YOUR_GOOGLE_DRIVE_FOLDER_ID"

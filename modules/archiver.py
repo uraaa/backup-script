@@ -10,11 +10,11 @@ logger = logging.getLogger(__name__)
 def make_archive(temp_dir: str, output_dir: str, dry_run: bool = False) -> str:
     """
     Create tar.gz archive from temp_dir content.
-    Archive name: mautic_backup_YYYYmmdd_HHMMSS.tar.gz
+    Archive name: backup_YYYYmmdd_HHMMSS.tar.gz
     Returns path to archive.
     """
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    archive_name = f"mautic_backup_{ts}.tar.gz"
+    archive_name = f"backup_{ts}.tar.gz"
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     archive_path = output_path / archive_name

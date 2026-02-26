@@ -15,7 +15,7 @@ class SharePointConfig:
     client_secret: str
     site_id: str
     drive_id: str
-    folder_path: str  # e.g., "/MauticBackups"
+    folder_path: str  # e.g., "/backups"
 
 
 class SharePointClient:

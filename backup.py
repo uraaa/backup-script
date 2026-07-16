@@ -15,10 +15,12 @@ from modules import paths as paths_mod
 from modules import db as db_mod
 from modules.archiver import make_archive
 from modules.storage_local import save_to_local
-from modules.rotation import rotate_local, rotate_sharepoint, rotate_gdrive, rotate_logs
-from modules.alerts import send_error_email
+from modules.rotation import rotate_local, rotate_sharepoint, rotate_gdrive, rotate_s3, rotate_mailru, rotate_logs
+from modules.alerts import send_error_email, send_telegram_message
 from modules.storage_sharepoint import SharePointClient, SharePointConfig
 from modules.storage_gdrive import GoogleDriveClient, GoogleDriveConfig
+from modules.storage_s3 import S3Client, S3Config
+from modules.storage_mailru import MailRuClient, MailRuConfig
 
 import os
 
@@ -42,6 +44,41 @@ def ensure_dir(p: str):
     Path(p).mkdir(parents=True, exist_ok=True)
 
 
+def send_alerts(alerts_cfg: dict, subject: str, body: str) -> None:
+    """
+    Fan out a notification to every enabled channel under the `alerts` config
+    section (currently `email` and `telegram`). Add a new channel by adding
+    another `if` block here reading its own sub-section.
+    """
+    email_cfg = alerts_cfg.get('email', {})
+    if email_cfg.get('enabled', False):
+        try:
+            send_error_email(
+                smtp_host=email_cfg.get('smtp_host', ''),
+                smtp_port=int(email_cfg.get('smtp_port', 25)),
+                use_tls=bool(email_cfg.get('use_tls', True)),
+                username=email_cfg.get('username', ''),
+                password=str(email_cfg.get('password', '')),
+                from_email=email_cfg.get('from_email', ''),
+                to_emails=list(email_cfg.get('to_emails', [])),
+                subject=subject,
+                body=body,
+            )
+        except Exception:
+            logger.exception("Failed to send alert email")
+
+    telegram_cfg = alerts_cfg.get('telegram', {})
+    if telegram_cfg.get('enabled', False):
+        try:
+            send_telegram_message(
+                bot_token=str(telegram_cfg.get('bot_token', '')),
+                chat_id=str(telegram_cfg.get('chat_id', '')),
+                text=f"{subject}\n\n{body}",
+            )
+        except Exception:
+            logger.exception("Failed to send Telegram alert")
+
+
 def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
     cfg = load_config(config_path)
 
@@ -59,6 +96,8 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
     alerts_cfg = cfg.get('alerts', {})
     sp_cfg = cfg.get('sharepoint', {})
     gd_cfg = cfg.get('google_drive', {})
+    s3_cfg = cfg.get('aws_s3', {})
+    mailru_cfg = cfg.get('mailru', {})
 
     temp_dir_root = backup_cfg.get('temp_dir', '/tmp/backup')
     local_dir = backup_cfg.get('local_dir', './backups')
@@ -72,6 +111,8 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
     local_saved_path = None
     sharepoint_uploaded_name = None
     gdrive_uploaded_name = None
+    s3_uploaded_name = None
+    mailru_uploaded_name = None
 
     try:
         # Prepare dirs
@@ -89,15 +130,18 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
 
         # DB dump
         dump_dir = os.path.join(work_dir, 'database')
-        logger.info("Creating database dump into %s", dump_dir)
-        db_mod.dump_mysql(
+        db_type = db.get('type', 'mysql')
+        logger.info("Creating %s database dump into %s", db_type, dump_dir)
+        db_mod.dump_database(
+            db_type=db_type,
             host=db.get('host', 'localhost'),
-            port=int(db.get('port', 3306)),
+            port=int(db.get('port', 5432 if str(db_type).lower().startswith('post') else 3306)),
             db_name=db.get('name', ''),
             user=db.get('user', ''),
             password=str(db.get('password', '')),
             output_dir=dump_dir,
             dry_run=dry_run,
+            docker_container=db.get('docker_container'),
         )
 
         # Archive
@@ -174,67 +218,90 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
         else:
             logger.info("Google Drive upload disabled in config")
 
+        # AWS S3 upload if enabled
+        if s3_cfg.get('enabled', False):
+            try:
+                s3_cfg_obj = S3Config(
+                    access_key_id=str(s3_cfg.get('access_key_id', '')),
+                    secret_access_key=str(s3_cfg.get('secret_access_key', '')),
+                    bucket=str(s3_cfg.get('bucket', '')),
+                    region=str(s3_cfg.get('region', 'us-east-1')),
+                    prefix=str(s3_cfg.get('prefix', '')),
+                    endpoint_url=s3_cfg.get('endpoint_url') or None,
+                )
+                s3_client = S3Client(s3_cfg_obj)
+                s3_uploaded_name = s3_client.upload_file(local_saved_path, dry_run=dry_run)
+                try:
+                    rotate_s3(s3_client, max_archives=max_archives, dry_run=dry_run)
+                except Exception:
+                    logger.exception("S3 rotation failed")
+                    exit_code = 1
+            except Exception:
+                logger.exception("S3 upload failed")
+                exit_code = 1
+        else:
+            logger.info("S3 upload disabled in config")
+
+        # Mail.ru Cloud upload if enabled
+        if mailru_cfg.get('enabled', False):
+            try:
+                mailru_cfg_obj = MailRuConfig(
+                    username=str(mailru_cfg.get('username', '')),
+                    password=str(mailru_cfg.get('password', '')),
+                    remote_folder=str(mailru_cfg.get('remote_folder', '/backups')),
+                    webdav_url=str(mailru_cfg.get('webdav_url', 'https://webdav.cloud.mail.ru')),
+                )
+                mailru_client = MailRuClient(mailru_cfg_obj)
+                mailru_uploaded_name = mailru_client.upload_file(local_saved_path, dry_run=dry_run)
+                try:
+                    rotate_mailru(mailru_client, max_archives=max_archives, dry_run=dry_run)
+                except Exception:
+                    logger.exception("Mail.ru Cloud rotation failed")
+                    exit_code = 1
+            except Exception:
+                logger.exception("Mail.ru Cloud upload failed")
+                exit_code = 1
+        else:
+            logger.info("Mail.ru Cloud upload disabled in config")
+
         logger.info("==== Backup finished ====")
         # Send alert on partial failures as well
-        try:
-            if exit_code == 1 and alerts_cfg.get('enabled', False):
-                subject = f"Backup FAILED (partial): {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                log_file_hint = os.path.join(log_dir, f"backup_{datetime.now().strftime('%Y-%m-%d')}.log")
-                body = (
-                    "One or more non-fatal errors occurred during backup.\n\n"
-                    f"Config: {config_path}\n"
-                    f"Work dir: {work_dir}\n"
-                    f"Local archive (if any): {archive_local_path}\n"
-                    f"Local saved (if any): {local_saved_path}\n"
-                    f"SharePoint uploaded name (if any): {sharepoint_uploaded_name}\n"
-                    f"Google Drive uploaded name (if any): {gdrive_uploaded_name}\n\n"
-                    f"See log file: {log_file_hint}\n"
-                )
-                send_error_email(
-                    smtp_host=alerts_cfg.get('smtp_host', ''),
-                    smtp_port=int(alerts_cfg.get('smtp_port', 25)),
-                    use_tls=bool(alerts_cfg.get('use_tls', True)),
-                    username=alerts_cfg.get('username', ''),
-                    password=str(alerts_cfg.get('password', '')),
-                    from_email=alerts_cfg.get('from_email', ''),
-                    to_emails=list(alerts_cfg.get('to_emails', [])),
-                    subject=subject,
-                    body=body,
-                )
-        except Exception:
-            logger.exception("Failed to send partial-failure alert email")
+        if exit_code == 1:
+            subject = f"Backup FAILED (partial): {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            log_file_hint = os.path.join(log_dir, f"backup_{datetime.now().strftime('%Y-%m-%d')}.log")
+            body = (
+                "One or more non-fatal errors occurred during backup.\n\n"
+                f"Config: {config_path}\n"
+                f"Work dir: {work_dir}\n"
+                f"Local archive (if any): {archive_local_path}\n"
+                f"Local saved (if any): {local_saved_path}\n"
+                f"SharePoint uploaded name (if any): {sharepoint_uploaded_name}\n"
+                f"Google Drive uploaded name (if any): {gdrive_uploaded_name}\n"
+                f"S3 uploaded key (if any): {s3_uploaded_name}\n"
+                f"Mail.ru Cloud uploaded name (if any): {mailru_uploaded_name}\n\n"
+                f"See log file: {log_file_hint}\n"
+            )
+            send_alerts(alerts_cfg, subject, body)
         return exit_code
 
     except Exception as e:
         logger.exception("Backup failed with an unhandled error")
-        try:
-            if alerts_cfg.get('enabled', False):
-                subject = f"Backup FAILED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                log_file_hint = os.path.join(log_dir, f"backup_{datetime.now().strftime('%Y-%m-%d')}.log")
-                body = (
-                    "An error occurred during backup.\n\n"
-                    f"Config: {config_path}\n"
-                    f"Work dir: {work_dir}\n"
-                    f"Local archive (if any): {archive_local_path}\n"
-                    f"Local saved (if any): {local_saved_path}\n"
-                    f"SharePoint uploaded name (if any): {sharepoint_uploaded_name}\n"
-                    f"Google Drive uploaded name (if any): {gdrive_uploaded_name}\n\n"
-                    f"See log file: {log_file_hint}\n\n"
-                    f"Traceback:\n{traceback.format_exc()}"
-                )
-                send_error_email(
-                    smtp_host=alerts_cfg.get('smtp_host', ''),
-                    smtp_port=int(alerts_cfg.get('smtp_port', 25)),
-                    use_tls=bool(alerts_cfg.get('use_tls', True)),
-                    username=alerts_cfg.get('username', ''),
-                    password=str(alerts_cfg.get('password', '')),
-                    from_email=alerts_cfg.get('from_email', ''),
-                    to_emails=list(alerts_cfg.get('to_emails', [])),
-                    subject=subject,
-                    body=body,
-                )
-        except Exception:
-            logger.exception("Failed to send alert email")
+        subject = f"Backup FAILED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        log_file_hint = os.path.join(log_dir, f"backup_{datetime.now().strftime('%Y-%m-%d')}.log")
+        body = (
+            "An error occurred during backup.\n\n"
+            f"Config: {config_path}\n"
+            f"Work dir: {work_dir}\n"
+            f"Local archive (if any): {archive_local_path}\n"
+            f"Local saved (if any): {local_saved_path}\n"
+            f"SharePoint uploaded name (if any): {sharepoint_uploaded_name}\n"
+            f"Google Drive uploaded name (if any): {gdrive_uploaded_name}\n"
+            f"S3 uploaded key (if any): {s3_uploaded_name}\n"
+            f"Mail.ru Cloud uploaded name (if any): {mailru_uploaded_name}\n\n"
+            f"See log file: {log_file_hint}\n\n"
+            f"Traceback:\n{traceback.format_exc()}"
+        )
+        send_alerts(alerts_cfg, subject, body)
         return 1
     finally:
         # Cleanup working directory if not dry-run

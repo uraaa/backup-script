@@ -204,11 +204,18 @@ DB_NAME=""
 DB_USER=""
 DB_PASS=""
 
+DB_DOCKER_CONTAINER=""
+
 if [[ $DB_TYPE -ne 3 ]]; then
     case $DB_TYPE in
-        1) DEFAULT_PORT=3306 ;;
-        2) DEFAULT_PORT=5432 ;;
+        1) DEFAULT_PORT=3306; DB_TYPE_NAME="mysql" ;;
+        2) DEFAULT_PORT=5432; DB_TYPE_NAME="postgres" ;;
     esac
+
+    if [[ $DB_TYPE -eq 2 ]] && confirm "Does PostgreSQL run inside a Docker container (dump via 'docker exec')?"; then
+        ask "Docker container name running Postgres" "db"
+        DB_DOCKER_CONTAINER="$REPLY"
+    fi
 
     ask "DB host" "localhost"
     DB_HOST="$REPLY"
@@ -272,10 +279,39 @@ if confirm "Enable Google Drive upload?"; then
     info "Google Drive configured ✔"
 fi
 
+# ── AWS S3 ───────────────────────────────────────────────────
+S3_ENABLED=false
+S3_KEY="" S3_SECRET="" S3_REGION="" S3_BUCKET="" S3_PREFIX="" S3_ENDPOINT=""
+
+if confirm "Enable AWS S3 upload?"; then
+    S3_ENABLED=true
+    ask "AWS Access Key ID" ""; S3_KEY="$REPLY"
+    ask "AWS Secret Access Key" ""; S3_SECRET="$REPLY"
+    ask "AWS region" "us-east-1"; S3_REGION="$REPLY"
+    ask "S3 bucket name" ""; S3_BUCKET="$REPLY"
+    ask "Key prefix (folder inside bucket)" "backups"; S3_PREFIX="$REPLY"
+    ask "Custom S3-compatible endpoint URL (leave empty for real AWS)" ""
+    S3_ENDPOINT="$REPLY"
+    info "AWS S3 configured ✔"
+fi
+
+# ── Mail.ru Cloud ────────────────────────────────────────────
+MAILRU_ENABLED=false
+MAILRU_USER="" MAILRU_PASS="" MAILRU_FOLDER=""
+
+if confirm "Enable cloud.mail.ru upload?"; then
+    MAILRU_ENABLED=true
+    ask "Mail.ru email (login)" ""; MAILRU_USER="$REPLY"
+    warn "Use an app password, not your regular one: Облако -> Настройки -> Пароли для внешних приложений"
+    ask "App password" ""; MAILRU_PASS="$REPLY"
+    ask "Remote folder" "/backups"; MAILRU_FOLDER="$REPLY"
+    info "Mail.ru Cloud configured ✔"
+fi
+
 # ═════════════════════════════════════════════════════════════
 #  STEP 7 — Email notifications
 # ═════════════════════════════════════════════════════════════
-banner "Step 7/8 — Email Notifications"
+banner "Step 7/8 — Notifications (Email / Telegram)"
 
 ALERTS_ENABLED=false
 SMTP_HOST="" SMTP_PORT="" SMTP_TLS="" SMTP_USER="" SMTP_PASS="" FROM_EMAIL="" TO_EMAILS=""
@@ -291,6 +327,19 @@ if confirm "Enable email error notifications?"; then
     ask "Sender email (from)" "$SMTP_USER"; FROM_EMAIL="$REPLY"
     ask "Recipient emails (comma-separated)" "admin@example.com"; TO_EMAILS="$REPLY"
     info "Email notifications configured ✔"
+fi
+
+# ── Telegram ─────────────────────────────────────────────────
+TELEGRAM_ENABLED=false
+TELEGRAM_TOKEN="" TELEGRAM_CHAT_ID=""
+
+if confirm "Enable Telegram error notifications?"; then
+    TELEGRAM_ENABLED=true
+    ask "Bot token (from @BotFather)" ""; TELEGRAM_TOKEN="$REPLY"
+    warn "Message your bot once (e.g. /start), then find your chat_id at:"
+    warn "  https://api.telegram.org/bot<TOKEN>/getUpdates"
+    ask "Chat ID" ""; TELEGRAM_CHAT_ID="$REPLY"
+    info "Telegram notifications configured ✔"
 fi
 
 # ═════════════════════════════════════════════════════════════
@@ -326,12 +375,18 @@ done
 if [[ $DB_TYPE -ne 3 ]]; then
 cat <<EOF
 db:
+  type: ${DB_TYPE_NAME}
   host: ${DB_HOST}
   port: ${DB_PORT}
   name: ${DB_NAME}
   user: ${DB_USER}
   password: "${DB_PASS}"
 EOF
+    if [[ -n "$DB_DOCKER_CONTAINER" ]]; then
+cat <<EOF
+  docker_container: ${DB_DOCKER_CONTAINER}
+EOF
+    fi
 fi
 
 # ── backup section ──
@@ -345,25 +400,36 @@ logging:
   max_log_files: 30
 EOF
 
-# ── alerts section ──
+# ── alerts section (one sub-block per channel) ──
 cat <<EOF
 alerts:
-  enabled: ${ALERTS_ENABLED}
+  email:
+    enabled: ${ALERTS_ENABLED}
 EOF
 if [[ "$ALERTS_ENABLED" == "true" ]]; then
 cat <<EOF
-  smtp_host: ${SMTP_HOST}
-  smtp_port: ${SMTP_PORT}
-  use_tls: ${SMTP_TLS}
-  username: ${SMTP_USER}
-  password: "${SMTP_PASS}"
-  from_email: ${FROM_EMAIL}
-  to_emails:
+    smtp_host: ${SMTP_HOST}
+    smtp_port: ${SMTP_PORT}
+    use_tls: ${SMTP_TLS}
+    username: ${SMTP_USER}
+    password: "${SMTP_PASS}"
+    from_email: ${FROM_EMAIL}
+    to_emails:
 EOF
     IFS=',' read -ra EMAILS <<< "$TO_EMAILS"
     for em in "${EMAILS[@]}"; do
-        echo "    - $(echo "$em" | xargs)"
+        echo "      - $(echo "$em" | xargs)"
     done
+fi
+cat <<EOF
+  telegram:
+    enabled: ${TELEGRAM_ENABLED}
+EOF
+if [[ "$TELEGRAM_ENABLED" == "true" ]]; then
+cat <<EOF
+    bot_token: "${TELEGRAM_TOKEN}"
+    chat_id: "${TELEGRAM_CHAT_ID}"
+EOF
 fi
 
 # ── sharepoint section ──
@@ -391,6 +457,39 @@ if [[ "$GD_ENABLED" == "true" ]]; then
 cat <<EOF
   credentials_file: ${GD_CREDS}
   folder_id: "${GD_FOLDER}"
+EOF
+fi
+
+# ── aws_s3 section ──
+cat <<EOF
+aws_s3:
+  enabled: ${S3_ENABLED}
+EOF
+if [[ "$S3_ENABLED" == "true" ]]; then
+cat <<EOF
+  access_key_id: "${S3_KEY}"
+  secret_access_key: "${S3_SECRET}"
+  region: "${S3_REGION}"
+  bucket: "${S3_BUCKET}"
+  prefix: "${S3_PREFIX}"
+EOF
+    if [[ -n "$S3_ENDPOINT" ]]; then
+cat <<EOF
+  endpoint_url: "${S3_ENDPOINT}"
+EOF
+    fi
+fi
+
+# ── mailru section ──
+cat <<EOF
+mailru:
+  enabled: ${MAILRU_ENABLED}
+EOF
+if [[ "$MAILRU_ENABLED" == "true" ]]; then
+cat <<EOF
+  username: "${MAILRU_USER}"
+  password: "${MAILRU_PASS}"
+  remote_folder: "${MAILRU_FOLDER}"
 EOF
 fi
 

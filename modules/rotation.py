@@ -46,43 +46,40 @@ def rotate_local(directory: str, max_archives: int, dry_run: bool = False) -> No
                 raise
 
 
-def rotate_sharepoint(sp_client, max_archives: int, dry_run: bool = False) -> None:
+def _rotate_remote(client, max_archives: int, dry_run: bool, provider_label: str) -> None:
     """
-    Rotate files in SharePoint folder using client with list_files() -> List[(name,id)] and delete_file(id)
-    Sorted by filename descending (timestamp embedded), keep newest max_archives.
+    Shared rotation logic for any remote client exposing list_files() -> List[(name,id)]
+    and delete_file(id). Sorted by filename descending (timestamp embedded), keep newest
+    max_archives.
     """
-    files = sp_client.list_files()
-    # Filter by pattern and sort by name desc (timestamp order)
+    files = client.list_files()
     filtered = [(name, fid) for name, fid in files if ARCHIVE_RE.match(name)]
     filtered.sort(key=lambda x: x[0], reverse=True)
     if len(filtered) <= max_archives:
-        logger.info("SharePoint rotation: nothing to delete (have %d, max %d)", len(filtered), max_archives)
+        logger.info("%s rotation: nothing to delete (have %d, max %d)", provider_label, len(filtered), max_archives)
         return
     for name, fid in filtered[max_archives:]:
         if dry_run:
-            logger.info("[DRY-RUN] Would delete SharePoint archive: %s (id=%s)", name, fid)
+            logger.info("[DRY-RUN] Would delete %s archive: %s (id=%s)", provider_label, name, fid)
         else:
-            sp_client.delete_file(fid)
-            logger.info("Deleted SharePoint archive: %s", name)
+            client.delete_file(fid)
+            logger.info("Deleted %s archive: %s", provider_label, name)
+
+
+def rotate_sharepoint(sp_client, max_archives: int, dry_run: bool = False) -> None:
+    _rotate_remote(sp_client, max_archives, dry_run, "SharePoint")
 
 
 def rotate_gdrive(gd_client, max_archives: int, dry_run: bool = False) -> None:
-    """
-    Rotate files in Google Drive folder using client with list_files() -> List[(name,id)] and delete_file(id).
-    Sorted by filename descending (timestamp embedded), keep newest max_archives.
-    """
-    files = gd_client.list_files()
-    filtered = [(name, fid) for name, fid in files if ARCHIVE_RE.match(name)]
-    filtered.sort(key=lambda x: x[0], reverse=True)
-    if len(filtered) <= max_archives:
-        logger.info("Google Drive rotation: nothing to delete (have %d, max %d)", len(filtered), max_archives)
-        return
-    for name, fid in filtered[max_archives:]:
-        if dry_run:
-            logger.info("[DRY-RUN] Would delete Google Drive archive: %s (id=%s)", name, fid)
-        else:
-            gd_client.delete_file(fid)
-            logger.info("Deleted Google Drive archive: %s", name)
+    _rotate_remote(gd_client, max_archives, dry_run, "Google Drive")
+
+
+def rotate_s3(s3_client, max_archives: int, dry_run: bool = False) -> None:
+    _rotate_remote(s3_client, max_archives, dry_run, "S3")
+
+
+def rotate_mailru(mailru_client, max_archives: int, dry_run: bool = False) -> None:
+    _rotate_remote(mailru_client, max_archives, dry_run, "Mail.ru Cloud")
 
 
 def rotate_logs(log_dir: str, max_log_files: int, dry_run: bool = False) -> None:

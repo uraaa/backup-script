@@ -1,3 +1,8 @@
+# Shown in logs and in failure alerts (email/Telegram subject), so you can
+# tell which project/server a notification is about. Defaults to the config
+# file's name if omitted.
+name: myapp
+
 paths:
   # For a directory, a .gitignore found at its root is applied automatically
   # (node_modules, .next, .env, etc. get excluded without listing them by hand).

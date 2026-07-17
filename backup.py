@@ -3,6 +3,7 @@ import argparse
 import logging
 import os
 import shutil
+import socket
 import sys
 import traceback
 from datetime import datetime
@@ -87,7 +88,10 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
     max_log_files = int(log_cfg.get('max_log_files', 30))
     setup_logging(log_dir, verbose=verbose)
 
-    logger.info("==== Backup started ====")
+    project_name = str(cfg.get('name') or os.path.splitext(os.path.basename(config_path))[0])
+    hostname = socket.gethostname()
+
+    logger.info("==== Backup started (%s @ %s) ====", project_name, hostname)
 
     # Extract config parts
     paths_cfg = cfg.get('paths', [])
@@ -264,13 +268,15 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
         else:
             logger.info("Mail.ru Cloud upload disabled in config")
 
-        logger.info("==== Backup finished ====")
+        logger.info("==== Backup finished (%s @ %s) ====", project_name, hostname)
         # Send alert on partial failures as well
         if exit_code == 1:
-            subject = f"Backup FAILED (partial): {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            subject = f"[{project_name}] Backup FAILED (partial): {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             log_file_hint = os.path.join(log_dir, f"backup_{datetime.now().strftime('%Y-%m-%d')}.log")
             body = (
                 "One or more non-fatal errors occurred during backup.\n\n"
+                f"Project: {project_name}\n"
+                f"Host: {hostname}\n"
                 f"Config: {config_path}\n"
                 f"Work dir: {work_dir}\n"
                 f"Local archive (if any): {archive_local_path}\n"
@@ -286,10 +292,12 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
 
     except Exception as e:
         logger.exception("Backup failed with an unhandled error")
-        subject = f"Backup FAILED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        subject = f"[{project_name}] Backup FAILED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         log_file_hint = os.path.join(log_dir, f"backup_{datetime.now().strftime('%Y-%m-%d')}.log")
         body = (
             "An error occurred during backup.\n\n"
+            f"Project: {project_name}\n"
+            f"Host: {hostname}\n"
             f"Config: {config_path}\n"
             f"Work dir: {work_dir}\n"
             f"Local archive (if any): {archive_local_path}\n"

@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import socket
+import subprocess
 import sys
 import traceback
 from datetime import datetime
@@ -96,6 +97,7 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
     # Extract config parts
     paths_cfg = cfg.get('paths', [])
     db = cfg.get('db', {})
+    frappe_cfg = cfg.get('frappe', {})
     backup_cfg = cfg.get('backup', {})
     alerts_cfg = cfg.get('alerts', {})
     sp_cfg = cfg.get('sharepoint', {})
@@ -123,30 +125,64 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
         ensure_dir(temp_dir_root)
         ensure_dir(local_dir)
 
-        # Stage sources
-        logger.info("Staging sources to %s", work_dir)
         ensure_dir(work_dir)
-        paths_mod.stage_sources(
-            temp_dir=work_dir,
-            paths=paths_cfg,
-            dry_run=dry_run,
-        )
 
-        # DB dump
-        dump_dir = os.path.join(work_dir, 'database')
-        db_type = db.get('type', 'mysql')
-        logger.info("Creating %s database dump into %s", db_type, dump_dir)
-        db_mod.dump_database(
-            db_type=db_type,
-            host=db.get('host', 'localhost'),
-            port=int(db.get('port', 5432 if str(db_type).lower().startswith('post') else 3306)),
-            db_name=db.get('name', ''),
-            user=db.get('user', ''),
-            password=str(db.get('password', '')),
-            output_dir=dump_dir,
-            dry_run=dry_run,
-            docker_container=db.get('docker_container'),
-        )
+        if frappe_cfg.get('enabled', False):
+            bench_dir = str(frappe_cfg.get('bench_dir', ''))
+            site = str(frappe_cfg.get('site', ''))
+            if not bench_dir:
+                raise ValueError("frappe.bench_dir is required when Frappe backup mode is enabled")
+            if not site:
+                raise ValueError("frappe.site is required when Frappe backup mode is enabled")
+            frappe_output_dir = os.path.join(work_dir, 'frappe')
+            ensure_dir(frappe_output_dir)
+            command = [
+                'bench',
+                '--site',
+                site,
+                'backup',
+                '--with-files',
+                '--compress',
+                '--backup-path',
+                frappe_output_dir,
+            ]
+            if dry_run:
+                logger.info("[DRY-RUN] Would create native Frappe backup for site %s", site)
+            else:
+                logger.info("Creating native Frappe backup for site %s", site)
+                result = subprocess.run(
+                    command,
+                    cwd=bench_dir,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                if result.stdout:
+                    logger.info("Frappe backup output:\n%s", result.stdout.rstrip())
+        else:
+            # Stage sources
+            logger.info("Staging sources to %s", work_dir)
+            paths_mod.stage_sources(
+                temp_dir=work_dir,
+                paths=paths_cfg,
+                dry_run=dry_run,
+            )
+
+            # DB dump
+            dump_dir = os.path.join(work_dir, 'database')
+            db_type = db.get('type', 'mysql')
+            logger.info("Creating %s database dump into %s", db_type, dump_dir)
+            db_mod.dump_database(
+                db_type=db_type,
+                host=db.get('host', 'localhost'),
+                port=int(db.get('port', 5432 if str(db_type).lower().startswith('post') else 3306)),
+                db_name=db.get('name', ''),
+                user=db.get('user', ''),
+                password=str(db.get('password', '')),
+                output_dir=dump_dir,
+                dry_run=dry_run,
+                docker_container=db.get('docker_container'),
+            )
 
         # Archive
         archive_output_dir = temp_dir_root  # create an archive next to work dir, then copy to local storage

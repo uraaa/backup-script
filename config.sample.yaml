@@ -3,6 +3,13 @@
 # file's name if omitted.
 name: myapp
 
+# Optional native Frappe backup mode. When enabled, `paths` and `db` below
+# are ignored and the utility runs Bench as the current operating-system user.
+frappe:
+  enabled: false
+  bench_dir: /home/frappe/frappe-bench
+  site: erp.testpro.io
+
 paths:
   # For a directory, a .gitignore found at its root is applied automatically
   # (node_modules, .next, .env, etc. get excluded without listing them by hand).

@@ -60,3 +60,12 @@ An installation is not complete until this README entry is committed.
   `/home/byi6fra/backups/automated-testpro-io` and uploaded to SharePoint
   `/testpro.io`; scheduled daily at 03:00 UTC with seven archives retained.
   Failure alerts are sent through Amazon SES email and Telegram.
+- Tasks (`tasks.ygubkin.pro`, `/opt/tasks/app`): script in
+  `/opt/backup-script`, PostgreSQL dump via `docker exec tasks-db` (DB has no
+  host port) plus app code (filtered by the project's own `.gitignore`) and
+  `/opt/tasks/.env`. Archives are stored locally in `/opt/backups/tasks` and
+  uploaded to S3 bucket `tasks-ygubkin-pro-db-backups` (scoped IAM user, no
+  account-wide access); scheduled daily at 03:00 UTC with 14 archives
+  retained. Failure alerts are sent through Telegram only; email is not
+  configured for this installation (personal project, not a TestPro alert
+  standard target).

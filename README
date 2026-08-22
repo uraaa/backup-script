@@ -18,3 +18,16 @@ local storage, remote upload, rotation, and alert pipeline:
 
 Run the utility as the operating-system user that owns the Bench. The generic
 `paths` and `db` sections are ignored while Frappe mode is enabled.
+
+Production installations
+========================
+
+- Mautic (`marketing`, `/var/www/mautic`): script in `/opt/mautic-backup`,
+  scheduled daily at 03:00 server time. Configured but currently requires
+  repair: the job cannot create `/opt/backup/logs` and no local backup directory
+  exists at `/var/backups/webapp`.
+- Frappe ERP/CRM (`erp.testpro.io`): script in `/opt/backup`, native full-site
+  backup with database, site config, public files, and private files. Archives
+  are stored locally in `/var/backups/frappe-erp` and uploaded to SharePoint
+  `/Frappe/auto`; scheduled daily at 03:00 UTC with seven archives retained.
+  Failure alerts are sent through Amazon SES email and Telegram.

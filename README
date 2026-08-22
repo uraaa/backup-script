@@ -19,8 +19,27 @@ local storage, remote upload, rotation, and alert pipeline:
 Run the utility as the operating-system user that owns the Bench. The generic
 `paths` and `db` sections are ignored while Frappe mode is enabled.
 
+Production alert standard
+=========================
+
+Every TestPro production installation must enable both failure-alert channels:
+
+- Amazon SES SMTP at `email-smtp.us-west-2.amazonaws.com:587` with TLS,
+  sending from `info@testpro.io` to `yuriy@testpro.io`.
+- Telegram notifications to chat ID `473762021`.
+
+Keep the Amazon SES username/password and Telegram bot token only in the
+deployed `config.yaml` with mode `0600`. Never commit real credentials. Send one
+test notification through each channel after installation or configuration
+changes.
+
 Production installations
 ========================
+
+After a new project is fully configured and verified, add it to this list as
+the final installation step. Record the project/domain, script location, backup
+destinations, schedule, retention, and alert channels, but never credentials.
+An installation is not complete until this README entry is committed.
 
 - Mautic (`marketing`, `/var/www/mautic`): script in `/opt/mautic-backup`,
   scheduled daily at 03:00 server time. Configured but currently requires

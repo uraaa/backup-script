@@ -40,22 +40,24 @@ logging:
   dir: /opt/backup/logs
   max_log_files: 30
 # Failure notifications. Each sub-section is an independent channel — enable
-# as many as you like, add a new one (e.g. slack) the same way.
+# as many as you like, add a new one (e.g. slack) the same way. TestPro
+# production installations must keep both email and Telegram enabled. Store
+# real credentials only in the deployed config.yaml, never in this repository.
 alerts:
   email:
     enabled: true
-    smtp_host: smtp.example.com
+    smtp_host: email-smtp.us-west-2.amazonaws.com
     smtp_port: 587
     use_tls: true
-    username: noreply@example.com
+    username: "CHANGE_ME"       # Amazon SES SMTP username
     password: "CHANGE_ME"
-    from_email: noreply@example.com
+    from_email: info@testpro.io
     to_emails:
-      - admin@example.com
+      - yuriy@testpro.io
   telegram:
-    enabled: false
+    enabled: true
     bot_token: "CHANGE_ME"     # from @BotFather
-    chat_id: "CHANGE_ME"       # your numeric chat_id (message the bot, then check getUpdates)
+    chat_id: "473762021"
 sharepoint:
   enabled: true
   tenant_id: "YOUR_TENANT_ID"

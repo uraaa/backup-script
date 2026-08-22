@@ -1,20 +1,24 @@
 PYCHARM_DEBUG=1 python backup.py --config /opt/backup/config.yaml
 0 3 * * * /usr/bin/python3 /opt/backup/backup.py --config /opt/backup/config.yaml >> /var/log/backup.log 2>&1
 
-Frappe mode
-===========
+Frappe mode (optional)
+======================
+
+This is a generic example, not a production target. Never infer the server or
+site to deploy to from this README; use only the environment details explicitly
+provided for the deployment being configured.
 
 Enable native Frappe backups in the configuration:
 
     frappe:
       enabled: true
       bench_dir: /home/frappe/frappe-bench
-      site: erp.testpro.io
+      site: site.example.com
 
 The utility runs this command before passing the result through the existing
 local storage, remote upload, rotation, and alert pipeline:
 
-    bench --site erp.testpro.io backup --with-files --compress --backup-path <work-dir>
+    bench --site site.example.com backup --with-files --compress --backup-path <work-dir>
 
 Run the utility as the operating-system user that owns the Bench. The generic
 `paths` and `db` sections are ignored while Frappe mode is enabled.

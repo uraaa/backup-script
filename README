@@ -54,3 +54,9 @@ An installation is not complete until this README entry is committed.
   are stored locally in `/var/backups/frappe-erp` and uploaded to SharePoint
   `/Frappe/auto`; scheduled daily at 03:00 UTC with seven archives retained.
   Failure alerts are sent through Amazon SES email and Telegram.
+- WordPress (`testpro.io`): script in `/home/byi6fra/backup-script`, full
+  `public_html` backup (excluding caches and error logs) with a MySQL dump.
+  Archives are stored locally in
+  `/home/byi6fra/backups/automated-testpro-io` and uploaded to SharePoint
+  `/testpro.io`; scheduled daily at 03:00 UTC with seven archives retained.
+  Failure alerts are sent through Amazon SES email and Telegram.

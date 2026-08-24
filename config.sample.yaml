@@ -22,7 +22,7 @@ paths:
   - path: /etc/nginx/nginx.conf
   - path: /etc/nginx/sites-available
 db:
-  type: mysql               # mysql (or mariadb) | postgres (or postgresql)
+  type: mysql               # mysql/mariadb | postgres/postgresql | mongo/mongodb
   host: localhost
   port: 3306                # 5432 for postgres
   name: myapp
@@ -32,6 +32,18 @@ db:
                                    # container instead of connecting over host/port
                                    # (use when Postgres only runs inside a docker
                                    # network, e.g. docker-compose without an exposed port)
+
+# MongoDB example. Leave name empty to dump the complete instance. Set
+# docker_container when mongodump should run inside the database container.
+# db:
+#   type: mongodb             # mongodb (or mongo)
+#   host: localhost
+#   port: 27017
+#   name: ""
+#   user: ""
+#   password: ""
+#   auth_database: admin
+#   docker_container: mongo
 backup:
   temp_dir: /tmp/backup
   local_dir: /var/backups/myapp

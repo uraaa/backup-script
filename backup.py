@@ -16,6 +16,7 @@ from modules.logging_setup import setup_logging
 from modules import paths as paths_mod
 from modules import db as db_mod
 from modules.archiver import make_archive
+from modules.manifest import create_manifest
 from modules.storage_local import save_to_local
 from modules.rotation import rotate_local, rotate_sharepoint, rotate_gdrive, rotate_s3, rotate_mailru, rotate_logs
 from modules.alerts import send_error_email, send_telegram_message
@@ -115,10 +116,15 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
     exit_code = 0
     archive_local_path = None
     local_saved_path = None
+    manifest_path = None
     sharepoint_uploaded_name = None
     gdrive_uploaded_name = None
     s3_uploaded_name = None
     mailru_uploaded_name = None
+    sp_client = None
+    gd_client = None
+    s3_client = None
+    mailru_client = None
 
     try:
         # Prepare dirs
@@ -175,13 +181,15 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
             db_mod.dump_database(
                 db_type=db_type,
                 host=db.get('host', 'localhost'),
-                port=int(db.get('port', 5432 if str(db_type).lower().startswith('post') else 3306)),
+                port=int(db.get('port', 5432 if str(db_type).lower().startswith('post') else
+                            27017 if str(db_type).lower() in ('mongo', 'mongodb') else 3306)),
                 db_name=db.get('name', ''),
                 user=db.get('user', ''),
                 password=str(db.get('password', '')),
                 output_dir=dump_dir,
                 dry_run=dry_run,
                 docker_container=db.get('docker_container'),
+                auth_database=db.get('auth_database'),
             )
 
         # Archive
@@ -190,6 +198,13 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
 
         # Save to local storage
         local_saved_path = save_to_local(archive_local_path, local_dir, dry_run=dry_run)
+
+        if dry_run:
+            manifest_path = f"{local_saved_path}.manifest.json"
+            logger.info("[DRY-RUN] Would create and verify checksum manifest %s", manifest_path)
+        else:
+            manifest_path = create_manifest(local_saved_path, project_name, hostname)
+            logger.info("Checksum manifest created and verified at %s", manifest_path)
 
         # Remove the temporary archive from temp_dir_root after copying to local to save space
         try:
@@ -205,13 +220,6 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
         except Exception:
             logger.exception("Log rotation failed (will continue)")
 
-        # Rotation for local
-        try:
-            rotate_local(local_dir, max_archives=max_archives, dry_run=dry_run)
-        except Exception:
-            logger.exception("Local rotation failed (will continue but mark as error)")
-            exit_code = 1
-
         # SharePoint upload if enabled
         if sp_cfg.get('enabled', False):
             try:
@@ -225,12 +233,7 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
                 )
                 sp_client = SharePointClient(cfg_obj)
                 sharepoint_uploaded_name = sp_client.upload_file(local_saved_path, dry_run=dry_run)
-                # Rotation for SharePoint
-                try:
-                    rotate_sharepoint(sp_client, max_archives=max_archives, dry_run=dry_run)
-                except Exception:
-                    logger.exception("SharePoint rotation failed")
-                    exit_code = 1
+                sp_client.upload_file(manifest_path, dry_run=dry_run)
             except Exception:
                 logger.exception("SharePoint upload failed")
                 exit_code = 1
@@ -246,12 +249,7 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
                 )
                 gd_client = GoogleDriveClient(gd_cfg_obj)
                 gdrive_uploaded_name = gd_client.upload_file(local_saved_path, dry_run=dry_run)
-                # Rotation for Google Drive
-                try:
-                    rotate_gdrive(gd_client, max_archives=max_archives, dry_run=dry_run)
-                except Exception:
-                    logger.exception("Google Drive rotation failed")
-                    exit_code = 1
+                gd_client.upload_file(manifest_path, dry_run=dry_run)
             except Exception:
                 logger.exception("Google Drive upload failed")
                 exit_code = 1
@@ -271,11 +269,7 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
                 )
                 s3_client = S3Client(s3_cfg_obj)
                 s3_uploaded_name = s3_client.upload_file(local_saved_path, dry_run=dry_run)
-                try:
-                    rotate_s3(s3_client, max_archives=max_archives, dry_run=dry_run)
-                except Exception:
-                    logger.exception("S3 rotation failed")
-                    exit_code = 1
+                s3_client.upload_file(manifest_path, dry_run=dry_run)
             except Exception:
                 logger.exception("S3 upload failed")
                 exit_code = 1
@@ -293,16 +287,31 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
                 )
                 mailru_client = MailRuClient(mailru_cfg_obj)
                 mailru_uploaded_name = mailru_client.upload_file(local_saved_path, dry_run=dry_run)
-                try:
-                    rotate_mailru(mailru_client, max_archives=max_archives, dry_run=dry_run)
-                except Exception:
-                    logger.exception("Mail.ru Cloud rotation failed")
-                    exit_code = 1
+                mailru_client.upload_file(manifest_path, dry_run=dry_run)
             except Exception:
                 logger.exception("Mail.ru Cloud upload failed")
                 exit_code = 1
         else:
             logger.info("Mail.ru Cloud upload disabled in config")
+
+        if exit_code == 0:
+            rotation_jobs = [("Local", lambda: rotate_local(local_dir, max_archives=max_archives, dry_run=dry_run))]
+            if sp_cfg.get('enabled', False):
+                rotation_jobs.append(("SharePoint", lambda: rotate_sharepoint(sp_client, max_archives=max_archives, dry_run=dry_run)))
+            if gd_cfg.get('enabled', False):
+                rotation_jobs.append(("Google Drive", lambda: rotate_gdrive(gd_client, max_archives=max_archives, dry_run=dry_run)))
+            if s3_cfg.get('enabled', False):
+                rotation_jobs.append(("S3", lambda: rotate_s3(s3_client, max_archives=max_archives, dry_run=dry_run)))
+            if mailru_cfg.get('enabled', False):
+                rotation_jobs.append(("Mail.ru Cloud", lambda: rotate_mailru(mailru_client, max_archives=max_archives, dry_run=dry_run)))
+            for label, rotate in rotation_jobs:
+                try:
+                    rotate()
+                except Exception:
+                    logger.exception("%s rotation failed", label)
+                    exit_code = 1
+        else:
+            logger.warning("Skipping rotation because backup or upload did not complete successfully")
 
         logger.info("==== Backup finished (%s @ %s) ====", project_name, hostname)
         # Send alert on partial failures as well
@@ -317,6 +326,7 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
                 f"Work dir: {work_dir}\n"
                 f"Local archive (if any): {archive_local_path}\n"
                 f"Local saved (if any): {local_saved_path}\n"
+                f"Checksum manifest (if any): {manifest_path}\n"
                 f"SharePoint uploaded name (if any): {sharepoint_uploaded_name}\n"
                 f"Google Drive uploaded name (if any): {gdrive_uploaded_name}\n"
                 f"S3 uploaded key (if any): {s3_uploaded_name}\n"
@@ -338,6 +348,7 @@ def run_backup(config_path: str, dry_run: bool, verbose: bool) -> int:
             f"Work dir: {work_dir}\n"
             f"Local archive (if any): {archive_local_path}\n"
             f"Local saved (if any): {local_saved_path}\n"
+            f"Checksum manifest (if any): {manifest_path}\n"
             f"SharePoint uploaded name (if any): {sharepoint_uploaded_name}\n"
             f"Google Drive uploaded name (if any): {gdrive_uploaded_name}\n"
             f"S3 uploaded key (if any): {s3_uploaded_name}\n"

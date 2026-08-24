@@ -1,6 +1,36 @@
 PYCHARM_DEBUG=1 python backup.py --config /opt/backup/config.yaml
 0 3 * * * /usr/bin/python3 /opt/backup/backup.py --config /opt/backup/config.yaml >> /var/log/backup.log 2>&1
 
+MongoDB backups
+===============
+
+Set `db.type` to `mongodb` (or `mongo`). The utility writes one native,
+gzip-compressed `mongodump` archive. Use `docker_container` when MongoDB is not
+exposed on the host. Leave `db.name` empty to dump the complete instance, or
+set it to limit the dump to one database. `auth_database` is optional.
+
+    db:
+      type: mongodb
+      host: localhost
+      port: 27017
+      name: ""
+      user: ""
+      password: ""
+      auth_database: admin
+      docker_container: mongo
+
+Checksum manifests
+==================
+
+Every successful archive has a sidecar named
+`<archive>.manifest.json`. It records schema version, project, hostname, UTC
+creation time, archive filename, byte size, and SHA-256 digest. The archive and
+manifest are uploaded and rotated as a pair. Rotation runs only after archive
+creation and all enabled uploads succeed.
+
+Verify a local pair by reading the `archive.sha256` and `archive.size_bytes`
+fields from the manifest and comparing them with `sha256sum` and `stat -c %s`.
+
 Frappe mode (optional)
 ======================
 

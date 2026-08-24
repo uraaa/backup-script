@@ -7,6 +7,7 @@ from typing import List, Tuple
 logger = logging.getLogger(__name__)
 
 ARCHIVE_RE = re.compile(r"^backup_\d{8}_\d{6}\.tar\.gz$")
+MANIFEST_SUFFIX = ".manifest.json"
 LOG_RE = re.compile(r"^backup_\d{4}-\d{2}-\d{2}\.log$")
 
 
@@ -41,8 +42,12 @@ def rotate_local(directory: str, max_archives: int, dry_run: bool = False) -> No
             try:
                 path.unlink()
                 logger.info("Deleted local archive: %s", path)
+                manifest = Path(f"{path}{MANIFEST_SUFFIX}")
+                if manifest.exists():
+                    manifest.unlink()
+                    logger.info("Deleted local manifest: %s", manifest)
             except Exception:
-                logger.exception("Failed to delete local archive: %s", path)
+                logger.exception("Failed to delete local archive pair: %s", path)
                 raise
 
 
@@ -53,6 +58,7 @@ def _rotate_remote(client, max_archives: int, dry_run: bool, provider_label: str
     max_archives.
     """
     files = client.list_files()
+    files_by_name = {name: fid for name, fid in files}
     filtered = [(name, fid) for name, fid in files if ARCHIVE_RE.match(name)]
     filtered.sort(key=lambda x: x[0], reverse=True)
     if len(filtered) <= max_archives:
@@ -64,6 +70,11 @@ def _rotate_remote(client, max_archives: int, dry_run: bool, provider_label: str
         else:
             client.delete_file(fid)
             logger.info("Deleted %s archive: %s", provider_label, name)
+            manifest_name = f"{name}{MANIFEST_SUFFIX}"
+            manifest_id = files_by_name.get(manifest_name)
+            if manifest_id:
+                client.delete_file(manifest_id)
+                logger.info("Deleted %s manifest: %s", provider_label, manifest_name)
 
 
 def rotate_sharepoint(sp_client, max_archives: int, dry_run: bool = False) -> None:

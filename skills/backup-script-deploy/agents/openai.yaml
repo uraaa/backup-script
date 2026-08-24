@@ -1,0 +1,4 @@
+interface:
+  display_name: "Backup Script Deploy"
+  short_description: "Deploy and verify recoverable server backups"
+  default_prompt: "Use $backup-script-deploy to install and verify backups for this application."

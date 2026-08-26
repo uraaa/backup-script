@@ -1,11 +1,16 @@
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+CHUNK_SIZE = 5 * 1024 * 1024
+MAX_CHUNK_RETRIES = 5
+RETRYABLE_UPLOAD_STATUS_CODES = {408, 416, 429, 500, 502, 503, 504}
 
 
 @dataclass
@@ -58,6 +63,40 @@ class SharePointClient:
             raise RuntimeError(f"Resolve folder failed: {resp.status_code} {resp.text}")
         return resp.json()
 
+    @staticmethod
+    def _next_expected_start(payload: dict, fallback: int) -> int:
+        ranges = payload.get("nextExpectedRanges") or []
+        if not ranges:
+            return fallback
+        start = str(ranges[0]).split("-", 1)[0]
+        return int(start) if start.isdigit() else fallback
+
+    def _query_upload_start(self, upload_url: str, fallback: int) -> int:
+        try:
+            response = self.session.get(upload_url, timeout=60)
+        except requests.RequestException as exc:
+            logger.warning(
+                "SharePoint upload status check failed at byte %s (%s)",
+                fallback,
+                type(exc).__name__,
+            )
+            return fallback
+        if response.status_code == 200:
+            return self._next_expected_start(response.json(), fallback)
+        if response.status_code == 404:
+            raise RuntimeError("SharePoint upload session expired")
+        if response.status_code in RETRYABLE_UPLOAD_STATUS_CODES:
+            return fallback
+        raise RuntimeError(f"SharePoint upload status check failed: HTTP {response.status_code}")
+
+    @staticmethod
+    def _retry_delay(attempt: int, response=None) -> float:
+        if response is not None:
+            retry_after = response.headers.get("Retry-After") if hasattr(response, "headers") else None
+            if retry_after and str(retry_after).isdigit():
+                return min(float(retry_after), 30.0)
+        return min(float(2 ** (attempt - 1)), 30.0)
+
     def upload_file(self, local_file_path: str, dry_run: bool = False) -> str:
         filename = os.path.basename(local_file_path)
         if dry_run:
@@ -78,24 +117,74 @@ class SharePointClient:
         if not upload_url:
             raise RuntimeError("No uploadUrl in session response")
 
-        chunk_size = 5 * 1024 * 1024  # 5MB
         size = os.path.getsize(local_file_path)
         with open(local_file_path, 'rb') as f:
             start = 0
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
+            failures = 0
+            while start < size:
+                f.seek(start)
+                chunk = f.read(CHUNK_SIZE)
                 end = start + len(chunk) - 1
                 headers = {
                     "Content-Length": str(len(chunk)),
                     "Content-Range": f"bytes {start}-{end}/{size}",
                 }
-                r = self.session.put(upload_url, headers=headers, data=chunk, timeout=600)
-                if r.status_code not in (200, 201, 202):
-                    logger.error("Chunk upload failed: %s %s", r.status_code, r.text)
-                    raise RuntimeError(f"Chunk upload failed: {r.status_code} {r.text}")
-                start = end + 1
+                response = None
+                try:
+                    response = self.session.put(upload_url, headers=headers, data=chunk, timeout=600)
+                except requests.RequestException as exc:
+                    failures += 1
+                    if failures > MAX_CHUNK_RETRIES:
+                        raise RuntimeError(
+                            f"SharePoint chunk upload failed after {MAX_CHUNK_RETRIES} retries at byte {start}"
+                        ) from None
+                    start = self._query_upload_start(upload_url, start)
+                    delay = self._retry_delay(failures)
+                    logger.warning(
+                        "SharePoint chunk upload interrupted at byte %s (%s); retrying in %.1fs (%s/%s)",
+                        start,
+                        type(exc).__name__,
+                        delay,
+                        failures,
+                        MAX_CHUNK_RETRIES,
+                    )
+                    time.sleep(delay)
+                    continue
+
+                if response.status_code in (200, 201):
+                    start = size
+                    break
+                if response.status_code == 202:
+                    next_start = self._next_expected_start(response.json(), end + 1)
+                    if next_start > start:
+                        failures = 0
+                    else:
+                        failures += 1
+                        if failures > MAX_CHUNK_RETRIES:
+                            raise RuntimeError(
+                                f"SharePoint chunk upload failed after {MAX_CHUNK_RETRIES} retries at byte {start}"
+                            ) from None
+                    start = next_start
+                    continue
+                if response.status_code in RETRYABLE_UPLOAD_STATUS_CODES:
+                    failures += 1
+                    if failures > MAX_CHUNK_RETRIES:
+                        raise RuntimeError(
+                            f"SharePoint chunk upload failed after {MAX_CHUNK_RETRIES} retries at byte {start}"
+                        ) from None
+                    start = self._query_upload_start(upload_url, start)
+                    delay = self._retry_delay(failures, response)
+                    logger.warning(
+                        "SharePoint chunk upload returned HTTP %s at byte %s; retrying in %.1fs (%s/%s)",
+                        response.status_code,
+                        start,
+                        delay,
+                        failures,
+                        MAX_CHUNK_RETRIES,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise RuntimeError(f"SharePoint chunk upload failed: HTTP {response.status_code}")
         logger.info("Uploaded to SharePoint: %s", filename)
         return filename
 

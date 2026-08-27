@@ -44,6 +44,8 @@ class FrappeModeTests(unittest.TestCase):
                 "site": "erp.testpro.io",
             }
         )
+        local_archive = self.root / "local.tar.gz"
+        local_archive.write_bytes(b"test backup archive")
 
         with (
             patch("subprocess.run") as bench_run,
@@ -51,7 +53,7 @@ class FrappeModeTests(unittest.TestCase):
             patch.object(backup.paths_mod, "stage_sources") as stage_sources,
             patch.object(backup.db_mod, "dump_database") as dump_database,
             patch.object(backup, "make_archive", return_value=str(self.root / "archive.tar.gz")),
-            patch.object(backup, "save_to_local", return_value=str(self.root / "local.tar.gz")),
+            patch.object(backup, "save_to_local", return_value=str(local_archive)),
             patch.object(backup, "rotate_logs"),
             patch.object(backup, "rotate_local"),
         ):
